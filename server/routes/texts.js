@@ -1,22 +1,22 @@
 const express = require('express')
 const router = express.Router()
-const Text = require('../models/Text')
 const auth = require('../middleware/auth')
+const Text = require('../models/Text')
 
-// ─── 获取用户的所有文本（分页） ───
+// ─── 获取列表（分页 + 筛选 + 搜索） ───
 router.get('/', auth, async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, platform, search } = req.query
+    const { page = 1, limit = 20, status, contentType, platform, search } = req.query
     const query = { userId: req.userId }
 
     if (status) query.status = status
+    if (contentType) query.contentType = contentType
     if (platform) query.platform = platform
-    if (search) {
-      query.$text = { $search: search }
-    }
+    if (search) query.$text = { $search: search }
 
     const total = await Text.countDocuments(query)
     const texts = await Text.find(query)
+      .select('-sections') // 列表不返回文章分节
       .sort({ updatedAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
@@ -24,19 +24,14 @@ router.get('/', auth, async (req, res) => {
 
     res.json({
       data: texts,
-      pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
+      pagination: { page: Number(page), limit: Number(limit), total, totalPages: Math.ceil(total / limit) }
     })
   } catch (err) {
     res.status(500).json({ error: '获取列表失败', message: err.message })
   }
 })
 
-// ─── 获取单篇文本 ───
+// ─── 获取单篇 ───
 router.get('/:id', auth, async (req, res) => {
   try {
     const text = await Text.findOne({ _id: req.params.id, userId: req.userId }).lean()
@@ -47,10 +42,10 @@ router.get('/:id', auth, async (req, res) => {
   }
 })
 
-// ─── 创建文本（保存到云端） ───
+// ─── 创建 ───
 router.post('/', auth, async (req, res) => {
   try {
-    const { title, content, summary, tags, platform } = req.body
+    const { title, content, contentType, summary, images, sections, hashtags, tags, platform } = req.body
     if (!content || !content.trim()) {
       return res.status(400).json({ error: '内容不能为空' })
     }
@@ -59,7 +54,11 @@ router.post('/', auth, async (req, res) => {
       userId: req.userId,
       title: title || '未命名作品',
       content,
+      contentType: contentType || 'general',
       summary: summary || content.slice(0, 200),
+      images: images || [],
+      sections: sections || [],
+      hashtags: hashtags || [],
       tags: tags || [],
       platform: platform || 'other'
     })
@@ -71,17 +70,14 @@ router.post('/', auth, async (req, res) => {
   }
 })
 
-// ─── 更新文本 ───
+// ─── 更新 ───
 router.put('/:id', auth, async (req, res) => {
   try {
-    const { title, content, summary, tags, platform, status } = req.body
+    const allowed = ['title', 'content', 'contentType', 'summary', 'images', 'sections', 'hashtags', 'tags', 'platform', 'status']
     const update = {}
-    if (title !== undefined) update.title = title
-    if (content !== undefined) update.content = content
-    if (summary !== undefined) update.summary = summary
-    if (tags !== undefined) update.tags = tags
-    if (platform !== undefined) update.platform = platform
-    if (status !== undefined) update.status = status
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) update[key] = req.body[key]
+    }
     update.$inc = { version: 1 }
 
     const text = await Text.findOneAndUpdate(
@@ -96,7 +92,7 @@ router.put('/:id', auth, async (req, res) => {
   }
 })
 
-// ─── 删除文本 ───
+// ─── 删除 ───
 router.delete('/:id', auth, async (req, res) => {
   try {
     const text = await Text.findOneAndDelete({ _id: req.params.id, userId: req.userId })
